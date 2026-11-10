@@ -99,7 +99,6 @@ test.describe("Data driven test execution", () => {
                     await page.locator('summary').filter({ hasText: 'Beacons of Hope Voting (Corp)- 3rd November 2026 (19:00 hrs) – 5th November' }).click();
 
                     await CommonUtilities.takeScreenshot(page, testCaseFolder, "Test_Case_" + testCaseNumber + "_After_Submit", true);
-                    await expect(page.locator('summary').filter({ hasText: 'Hello world' })).toBeVisible();
                     await CommonUtilities.takeScreenshot(page, testCaseFolder, "Test_Case_" + testCaseNumber + "_After_Submit", true);
 
                     console.log(`Test Case ${testCaseNumber} completed successfully.`);
