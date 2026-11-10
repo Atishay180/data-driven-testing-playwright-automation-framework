@@ -5,8 +5,8 @@ node_modules/
 /playwright-report/
 /reports/*
 !/reports/.gitkeep
-/data/excel/*
-!/data/excel/.gitkeep
+# /data/excel/*
+# !/data/excel/.gitkeep
 /data/Sample_DC/*
 !/data/Sample_DC/.gitkeep
 /blob-report/
