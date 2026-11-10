@@ -2,8 +2,11 @@
   "name": "l2i_automation",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "dev": "npx playwright test main.spec.js"
+    "dev": "npx playwright test main.spec.js",
+    "test": "playwright test",
+    "report": "playwright show-report"
   },
   "keywords": [],
   "author": "",

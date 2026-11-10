@@ -1,247 +1,121 @@
-import { test, request } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { ExcelUtils } from "../utils/ExcelUtils.js";
 import { CommonUtilities } from "../utils/CommonUtilities.js";
-import { ReportUtils } from "../utils/ReportUtils.js";
-import { executionContext } from "../RuntimeContext.js";
 
-let rows = [];
-let globalReportPath = "";
+// ---------------------------------------------------------
+// SETTINGS (from .env locally, from GitHub Variables in CI)
+// ---------------------------------------------------------
 
-// Replace it with L2I URL
 const url = process.env.BASE_URL;
-
-// Replace excel file name
 const excelFile = process.env.EXCEL_FILE_NAME;
-
-// Replace sheet name
 const sheetName = process.env.SHEET_NAME;
 
-
-// ---------------------------------------------------------
-// BEFORE ALL
-// ---------------------------------------------------------
-
-test.beforeAll(async () => {
-    rows = await ExcelUtils.readExcelTestData(`data/excel/${excelFile}`, sheetName);
-    console.log(`Loaded rows: ${rows.length}`);
-
-    const todaysDate = CommonUtilities.getCurrentDate();
-    globalReportPath = await CommonUtilities.createFolder(todaysDate);
-    console.log(`Reports folder ready at: ${globalReportPath}`);
-
-    await ReportUtils.createExcelSheet(globalReportPath);
-});
+// Created once per run in playwright.config.js
+const reportPath = process.env.REPORT_PATH;
 
 
 // ---------------------------------------------------------
-// ACTUAL EXECUTION
+// READ EXCEL AT LOAD TIME
+// ---------------------------------------------------------
+// Playwright must know the full list of tests BEFORE any test starts,
+// so the Excel file is read here (top-level await), not inside a test or beforeAll.
+
+const allRows = await ExcelUtils.readExcelTestData(`data/excel/${excelFile}`, sheetName);
+
+// Same filter as before: only rows where Executor = Y or Executor = YES
+const rows = allRows.filter(row => row["Executor"]?.toString().trim().toUpperCase() === "Y" || row["Executor"]?.toString().trim().toUpperCase() === "YES");
+console.log(`Rows selected for execution: ${rows.length}`);
+
+// Test_Case must be unique inside a scenario (it decides the folder name and test title)
+const seen = new Set();
+for (const row of rows) {
+    const key = `${row["Test_Scenario_Folder_Name"]}|${row["Test_Case"]}`;
+    if (seen.has(key)) {
+        throw new Error(
+            `Duplicate Test_Case "${row["Test_Case"]}" in scenario "${row["Test_Scenario_Folder_Name"]}". ` +
+            `Each Test_Case must be unique within a scenario.`
+        );
+    }
+    seen.add(key);
+}
+
+
+// ---------------------------------------------------------
+// ONE TEST PER EXCEL ROW
 // ---------------------------------------------------------
 
-test("Data driven test execution", async ({ browser }) => {
+test.describe("Data driven test execution", () => {
 
-    // -----------------------------------------------------
-    // Filter only Executor = Y rows
-    // -----------------------------------------------------
+    // Runs before EVERY test (and every retry): screenshot counter back to 1, runTimeData emptied
+    test.beforeEach(() => {
+        CommonUtilities.resetTestState();
+    });
 
-    const executableRows = rows.filter(row => row["Executor"]?.toString().trim().toUpperCase() === "Y");
+    // Skip (not fail) if no rows are marked Y
+    if (rows.length === 0) {
+        test("No executable rows found", () => {
+            test.skip(true, "No executable rows found in Excel where Executor = Y");
+        });
+        return;
+    }
 
+    for (const row of rows) {
 
-    // -----------------------------------------------------
-    // Skip if no rows are marked Y
-    // -----------------------------------------------------
+        const testScenarioFolderName = row["Test_Scenario_Folder_Name"]?.trim();
+        const testCaseNumber = row["Test_Case"]?.trim();
+        const executionType = row["Execution_Type"]?.toString().trim().toLowerCase() || "";
 
-    test.skip(executableRows.length === 0, "No executable rows found in Excel where Executor = Y");
-    console.log(`Rows selected for execution: ${executableRows.length}`);
-
-    // -----------------------------------------------------
-    // Maximum parallel executions
-    // -----------------------------------------------------
-    // 2 rows will execute at the same time.
-    // -----------------------------------------------------
-
-    const MAX_PARALLEL_EXECUTIONS = Number(process.env.MAX_PARALLEL_EXECUTIONS) || 2;
-
-    // -----------------------------------------------------
-    // Report writing lock
-    // -----------------------------------------------------
-    // Multiple parallel executions may finish at the same
-    // time. Excel report writing should therefore happen
-    // one at a time.
-    // -----------------------------------------------------
-
-    let reportWriteChain = Promise.resolve();
-
-
-    // -----------------------------------------------------
-    // Function to execute one Excel row
-    // -----------------------------------------------------
-
-    const executeExcelRow = async (args, rowIndex) => {
-
-        await executionContext.run(
+        // 'annotation' is read later by ExcelReporter to fill the Excel report
+        test(
+            `${testScenarioFolderName} | TC ${testCaseNumber}`,
             {
-                screenshotCounter: 1,
-                runTimeData: {}
+                annotation: [
+                    { type: "Test_Case", description: testCaseNumber },
+                    { type: "TestCaseType", description: row["TestCaseType"] ?? "" },
+                ],
             },
-            async () => {
-                const context = await browser.newContext();
-                const page = await context.newPage();
-                const apiContext = await request.newContext();
-
-
-                // -------------------------------------------------
-                // Row-specific variables
-                // -------------------------------------------------
-
-                const startTime = Date.now();
-
-                let status = "PASS";
-                let comments = "NA";
-                let errorMessage = "";
-                let testCaseType = args["TestCaseType"];
-                const testScenarioFolderName = args["Test_Scenario_Folder_Name"]?.trim();
-                const testCaseNumber = args["Test_Case"]?.trim();
-                const executionType = args["Execution_Type"]?.toString().trim().toLowerCase() || "";
-
-                let testScenarioFolder = "";
-                let testCaseFolder = "";
+            // 'page' and 'request' are Playwright's built-in fixtures: created before the test,
+            // closed automatically after it, and they respect baseURL/trace/screenshot from the config.
+            async ({ page, request: apiContext }) => {
 
                 console.log(`\n==================================================`);
-                console.log(`Starting Row ${rowIndex + 1}`);
-                console.log(`Test Case: ${testCaseNumber}`);
+                console.log(`Starting: ${testScenarioFolderName} | Test Case: ${testCaseNumber}`);
                 console.log(`Execution Type: ${executionType}`);
                 console.log(`==================================================`);
 
+                // -------------------------------------------------
+                // Evidence folders: reports/<date>/<scenario>/TC_xx
+                // -------------------------------------------------
+                const testScenarioFolder = await CommonUtilities.createFolder(testScenarioFolderName, reportPath);
+                const testCaseFolder = await CommonUtilities.createTestCaseFolder(testCaseNumber, testScenarioFolder);
+
                 try {
-                    // -------------------------------------------------
-                    // MAIN FOLDER INSIDE TODAY'S DATE FOLDER
-                    // -------------------------------------------------
-
-                    testScenarioFolder = await CommonUtilities.createFolder(testScenarioFolderName, globalReportPath);
-                    console.log(`Test_Scenario folder ready at: ${testScenarioFolder}`);
-
-
-                    // -------------------------------------------------
-                    // TEST CASE FOLDER
-                    // -------------------------------------------------
-
-                    testCaseFolder = await CommonUtilities.createTestCaseFolder(testCaseNumber, testScenarioFolder);
-                    console.log(`Test_Case folder ready at: ${testCaseFolder}`);
-
                     // =================================================
                     // E2E TESTING (Your test code goes here)
+                    // 'row' = this Excel row, 'apiContext' = API request helper
                     // =================================================
                     await page.goto(url);
 
                     await page.locator('summary').filter({ hasText: 'Beacons of Hope Voting (Corp)- 3rd November 2026 (19:00 hrs) – 5th November' }).click();
 
-                    // Capture full screenshot
+                    await CommonUtilities.takeScreenshot(page, testCaseFolder, "Test_Case_" + testCaseNumber + "_After_Submit", true);
+                    await expect(page.locator('summary').filter({ hasText: 'Hello world' })).toBeVisible();
                     await CommonUtilities.takeScreenshot(page, testCaseFolder, "Test_Case_" + testCaseNumber + "_After_Submit", true);
 
                     console.log(`Test Case ${testCaseNumber} completed successfully.`);
                 }
-
-
-                // =====================================================
-                // ERROR HANDLING
-                // =====================================================
-
                 catch (error) {
-                    status = "FAIL";
-                    errorMessage = error?.message || String(error);
-                    console.error(`Test Case ${testCaseNumber} failed: ${errorMessage}`);
-
-                    // -------------------------------------------------
-                    // Emergency Screenshot
-                    // -------------------------------------------------
+                    // Emergency screenshot into the test case folder, then RE-THROW
+                    // so Playwright marks this row as failed (no more silent failures).
+                    console.error(`Test Case ${testCaseNumber} failed: ${error?.message || error}`);
                     try {
-                        const screenshotDestination = testCaseFolder || globalReportPath;
-                        await CommonUtilities.takeScreenshot(page, screenshotDestination, `Test_Case_${testCaseNumber}_Failure`, true);
-
-                    }
-
-                    catch (screenshotErr) {
+                        await CommonUtilities.takeScreenshot(page, testCaseFolder, `Test_Case_${testCaseNumber}_Failure`, true);
+                    } catch (screenshotErr) {
                         console.error("Failed to capture error screenshot:", screenshotErr?.message || screenshotErr);
                     }
+                    throw error;
                 }
-
-                // =====================================================
-                // FINALLY
-                // =====================================================
-
-                finally {
-                    const durationInMinutes = ((Date.now() - startTime) / 60000).toFixed(2);
-
-                    // -------------------------------------------------
-                    // Append result to Excel report
-                    // -------------------------------------------------
-                    // Report writes are queued so two parallel tests
-                    // do not write to the same Excel file simultaneously.
-                    // -------------------------------------------------
-                    reportWriteChain = reportWriteChain.then(async () => {
-
-                        await ReportUtils.appendTestResult(
-                            globalReportPath,
-                            {
-                                testCase: args["Test_Case"],
-                                testCaseType,
-                                status,
-                                duration: durationInMinutes,
-                                errorMessage: errorMessage,
-                                comments
-                            }
-                        );
-
-                    });
-
-                    await reportWriteChain;
-
-                    // -------------------------------------------------
-                    // Close API context
-                    // -------------------------------------------------
-
-                    try {
-                        await apiContext.dispose();
-                    } catch (apiError) {
-                        console.error(`Failed to close API context for ${testCaseNumber}:`, apiError?.message || apiError);
-                    }
-
-
-                    // -------------------------------------------------
-                    // Close browser context
-                    // -------------------------------------------------
-
-                    try {
-                        await context.close();
-                    } catch (contextError) {
-                        console.error(`Failed to close browser context for ${testCaseNumber}:`, contextError?.message || contextError);
-                    }
-
-                    console.log(`Finished Test Case: ${testCaseNumber}`);
-                }
-
             }
         );
-    };
-
-
-    // =========================================================
-    // RUN ROWS WITH MAXIMUM 2 PARALLEL EXECUTIONS
-    // =========================================================
-
-    for (let i = 0; i < executableRows.length; i += MAX_PARALLEL_EXECUTIONS) {
-
-        const currentBatch = executableRows.slice(i, i + MAX_PARALLEL_EXECUTIONS);
-
-        console.log(`\n**************************************************`);
-        console.log(`Starting parallel batch`);
-        console.log(`Rows: ${currentBatch.length}`);
-        console.log(`**************************************************`);
-
-        // Run maximum 2 rows simultaneously
-        await Promise.all(currentBatch.map((args, batchIndex) => executeExcelRow(args, i + batchIndex)));
-
-        console.log(`Parallel batch completed.`);
     }
-
 });

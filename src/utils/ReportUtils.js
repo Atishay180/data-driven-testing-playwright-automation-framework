@@ -2,12 +2,14 @@ import ExcelJS from 'exceljs';
 import fs from 'fs';
 import path from 'path';
 
+const REPORT_FILE_NAME = "ExecutionReport.xlsx";
+const REPORT_SHEET_NAME = "ExecutionReport";
+
 class ReportUtils {
     static async createExcelSheet(folderPath) {
         console.log(`Creating excel report inside: ${folderPath}`);
 
-        const fileName = "ExecutionReport.xlsx";
-        const filePath = path.join(folderPath, fileName);
+        const filePath = path.join(folderPath, REPORT_FILE_NAME);
 
         // 1. Check if the file already exists
         if (fs.existsSync(filePath)) {
@@ -15,13 +17,8 @@ class ReportUtils {
         }
 
         const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('ExecutionReport');
+        const worksheet = workbook.addWorksheet(REPORT_SHEET_NAME);
 
-        // const headers = [
-        //     "Test_Case", "Product", "Execution_Type", "Test_Case_Description",
-        //     "Expected_Result", "Actual_Result", "Status", "Execution_Date_Time",
-        //     "Execution_Duration", "Error_Message", "Policy_Number", "Lead_ID"
-        // ];
         const headers = [
             "Test_Case", "TestCaseType", "Status", "Execution_Date_Time",
             "Execution_Duration", "Error_Message", "Comments"
@@ -55,42 +52,48 @@ class ReportUtils {
         }
     }
 
+    /**
+     * Append ONE result row (kept for backward compatibility).
+     */
     static async appendTestResult(folderPath, data) {
-        const fileName = "ExecutionReport.xlsx";
-        const filePath = path.join(folderPath, fileName);
+        await ReportUtils.appendTestResults(folderPath, [data]);
+    }
+
+    /**
+     * Append MANY result rows with a single read + a single write.
+     * Called once by the Excel reporter at the end of the run.
+     *
+     * Each item: { testCase, testCaseType, status, duration, errorMessage, comments, executedAt? }
+     */
+    static async appendTestResults(folderPath, results) {
+        const filePath = path.join(folderPath, REPORT_FILE_NAME);
 
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.readFile(filePath);
-        const worksheet = workbook.getWorksheet('ExecutionReport');
+        const worksheet = workbook.getWorksheet(REPORT_SHEET_NAME);
 
-        // 1. Capture the new row in a variable
-        const newRow = worksheet.addRow([
-            data.testCase,
-            data.testCaseType,
-            data.status,
-            new Date().toLocaleString(),
-            `${data.duration} mins`,
-            data.errorMessage || "",
-            data.comments
-        ]);
+        for (const data of results) {
+            const newRow = worksheet.addRow([
+                data.testCase,
+                data.testCaseType,
+                data.status,
+                (data.executedAt ?? new Date()).toLocaleString(),
+                `${data.duration} mins`,
+                data.errorMessage || "",
+                data.comments
+            ]);
 
-        // 2. Apply Alignment to every cell in this new row
-        newRow.eachCell((cell) => {
-            cell.alignment = {
-                vertical: 'middle',
-                horizontal: 'center',
-            };
+            newRow.eachCell((cell) => {
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
+            });
+        }
 
-            // Optional: Add a border to keep it consistent with the header
-            cell.border = {
-                top: { style: 'thin' },
-                left: { style: 'thin' },
-                bottom: { style: 'thin' },
-                right: { style: 'thin' }
-            };
-        });
-
-        // 3. Save the changes
         await workbook.xlsx.writeFile(filePath);
     }
 }

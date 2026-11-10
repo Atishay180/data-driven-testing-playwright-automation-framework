@@ -2,12 +2,22 @@
 import { expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { executionContext } from '../RuntimeContext.js';
+
+let screenshotCounter = 1;
+let runTimeData = {};
 
 class CommonUtilities {
 
     static get runTimeData() {
-        return executionContext.getStore().runTimeData;
+        return runTimeData;
+    }
+
+    /**
+     * Call at the start of EVERY test: counter back to 1, runtime data emptied.
+     */
+    static resetTestState() {
+        screenshotCounter = 1;
+        runTimeData = {};
     }
 
     /**
@@ -129,9 +139,7 @@ class CommonUtilities {
     static async takeScreenshot(page, folderPath, screenshotName, isFullSS = false) {
         console.log(`Capturing SS of ${screenshotName}...`);
 
-        const store = executionContext.getStore();
-
-        const finalName = `${store.screenshotCounter++}_${screenshotName}.jpeg`;
+        const finalName = `${screenshotCounter++}_${screenshotName}.jpeg`;
 
         const finalPath = path.join(folderPath, finalName);
 
